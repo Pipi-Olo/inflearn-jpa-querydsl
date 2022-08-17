@@ -1,7 +1,12 @@
 package pipiolo.querydsl;
 
+import com.querydsl.core.BooleanBuilder;
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.ExpressionUtils;
+import com.querydsl.core.types.Predicate;
+import com.querydsl.core.types.Projections;
+import com.querydsl.core.types.dsl.BooleanExpression;
 import com.querydsl.core.types.dsl.CaseBuilder;
 import com.querydsl.core.types.dsl.Expressions;
 import com.querydsl.jpa.JPAExpressions;
@@ -11,6 +16,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.transaction.annotation.Transactional;
+import pipiolo.querydsl.dto.MemberDto;
+import pipiolo.querydsl.dto.QMemberDto;
+import pipiolo.querydsl.dto.UserDto;
 import pipiolo.querydsl.entity.Member;
 import pipiolo.querydsl.entity.QMember;
 import pipiolo.querydsl.entity.Team;
@@ -549,6 +557,304 @@ public class QuerydslBasicTest {
                 .select(member.username.concat("_").concat(member.age.stringValue()))
                 .from(member)
                 .where(member.username.eq("member1"))
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    // 프로젝션 대상이 1개이면 String, Member, Integer 등 으로 받을 수 있다.
+    // 하지만, <String, Integer> 등 여러 객체 형태가 섞여 있으면 한 개의 객채로 받을 수가 없다.
+    // 이 때 Tuple 혹은 DTO 형태로 받는다.
+    @Test
+    void simpleProjection() {
+        List<String> result = query
+                .select(member.username)
+                .from(member)
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    // Tuple 은 Querydsl 패키지에 있는 기술이다. -> 리포지토리에서 Tuple 을 사용하는 것은 괜찮지만,
+    // 서비스, 컨트롤러 등 다른 계층에 넘어가 특정 기술에 종속하도록 하는 것은 좋지 않다.
+    // 즉 리포지토리에서 반환할 때는 Tuple 이 아닌 다른 형태(DTO)로 변환시켜야 한다.
+    @Test
+    void tupleProjection() {
+        List<Tuple> result = query
+                .select(member.username, member.age)
+                .from(member)
+                .fetch();
+
+        for (Tuple tuple : result) {
+            String username = tuple.get(member.username);
+            Integer age = tuple.get(member.age);
+
+            System.out.println("username = " + username);
+            System.out.println("age = " + age);
+        }
+    }
+
+
+    // JPQL 로 DTO 조회하는 방법 -> 패키지명 작성해야함. 별로임.
+    @Test
+    void findDtoByJPQL() {
+        List<MemberDto> result = em.createQuery(
+                "select new pipiolo.querydsl.dto.MemberDto(m.username, m.age) from Member m"
+                        , MemberDto.class)
+                .getResultList();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    // setter 접근법을 통해 MemberDto 생성하는 방법
+    // 먼저 MemberDto 객체를 생성하고 setter 메서도를 통해 값을 저장한다.
+    // 기본 생성자가 없으면 객체 생성이 애초에 불가능하다. -> 기본 생성자 필요함.
+    @Test
+    void findDtoByQuerydslSetter() {
+        List<MemberDto> result = query
+                .select(Projections.bean(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    // 필드 주입법
+    // setter 메소드가 없어도 동작한다.
+    // 라이브러리를 통해 private 이여도 필드 주입이 가능하다. 원리는 모르겠다..
+    @Test
+    void findDtoByQuerydslField() {
+        List<MemberDto> result = query
+                .select(Projections.fields(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    // 생성자 주입 방법
+    // 이 방법은 기본 생성자가 없어도 된다.
+    @Test
+    void findDtoByQuerydslConstructor() {
+        List<MemberDto> result = query
+                .select(Projections.constructor(MemberDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    @Test
+    void findUserDtoByQuerydsl() {
+        QMember memberSub = new QMember("memberSub");
+
+        List<UserDto> result = query
+                .select(Projections.fields(UserDto.class,
+                        member.username.as("name"), // 변수 명이 다를 경우, as 를 사용한다. 아니면 null 값이 들어간다.
+                        ExpressionUtils.as( // 모든 age 에 max 값을 넣기 위해 서브쿼리 사용. 위에 있는 as 와 같은 방법임. 서븤쿼리를 as 로 "age" 명칭으로 변강함. 왜? max 가 변수명과 다르므로
+                                JPAExpressions
+                                        .select(memberSub.age.max())
+                                        .from(memberSub)
+                                , "age")
+                ))
+                .from(member)
+                .fetch();
+
+        for (UserDto userDto : result) {
+            System.out.println("userDto = " + userDto);
+        }
+    }
+
+    // 생성자 조회 방식은 변수명이 달라도 문제 없다.
+    // 객체 타입만 맞으면 된다.
+    @Test
+    void findUserDtoByQuerydslConstructor() {
+        List<UserDto> result = query
+                .select(Projections.constructor(UserDto.class,
+                        member.username,
+                        member.age))
+                .from(member)
+                .fetch();
+
+        for (UserDto userDto : result) {
+            System.out.println("userDto = " + userDto);
+        }
+    }
+
+    // @QueryProjection 의 장점 : 컴파일 시점에 오류 발견이 가능하다. + 커맨드 P 누르면 생성자가 직접 눈에 보인다.
+    // Projections.constructor 방식은 생성자 개수 혹은 타입이 달라져도 컴파일 시점에 잡을 수 없다.
+    // 런타임 시점이 되어서야 잡을 수 있다.
+    // 단점 : Q 파일을 생성해야 한다. + DTO 가 Querydsl이라는 특정 에 대한 의존성이 생긴다.
+    // 특히 DTO 는 서비스, 컨트롤러 등 여러 레이어에서 돌아다니는 녀석이 특정 기술에 의존적이다.
+    // DTO 를 깔금하게 가져가려면, 리포티토리 DTO 조회 부분이 더러워지고, 대신에 전체 기술 의존도 관점에서 아키텍쳐 깔끔하다.
+    // @QueryProjection 을 통해 리포지토리 DTO 조회를 깔끔하게 가져가고, 어차피 Querydsl 기술을 다른 곳에서도 많이 사용하고,
+    // 하부 기술이 바뀌걸 갓 같지 않으면 사용한다.
+    // 즉 장단점이 존재한다.
+    @Test
+    void findDtoByQueryProjection() {
+        List<MemberDto> result = query
+                .select(new QMemberDto(member.username, member.age))
+                .from(member)
+                .fetch();
+
+        for (MemberDto memberDto : result) {
+            System.out.println("memberDto = " + memberDto);
+        }
+    }
+
+    @Test
+    void dynamicQuery_booleanBuilder() {
+        String username = "member1";
+        Integer age = 10;
+
+        List<Member> result = searchMemberV1(username, age);
+        assertThat(result.size()).isEqualTo(1);
+    }
+
+    private List<Member> searchMemberV1(String usernameCond, Integer ageCond) {
+        BooleanBuilder builder = new BooleanBuilder(); // 초기값 설정은 생성자를 통해 가능. 다만 무조건 null 이 아니어야 한다.
+        if (usernameCond != null) {
+            builder.and(member.username.eq(usernameCond));
+        }
+
+        if (ageCond != null) {
+            builder.and(member.age.eq(ageCond));
+        }
+
+        return query
+                .selectFrom(member)
+                .where(builder)
+                .fetch();
+    }
+
+    // 이 방법을 모르고 BooleanBuilder 를 쓰는 사람이 많다.
+    // 이 방법을 사용하면 훨씬 깔끔하게 가져갈 수 있다.
+    @Test
+    void dynamicQuery_WhereParam() {
+        String username = "member1";
+        Integer age = 10;
+
+        List<Member> result = searchMemberV2(username, age);
+        assertThat(result.size()).isEqualTo(1);
+    }
+
+    // Where 절에 null 이 들어가면 무시된다. -> 동적 쿼리 가능 이유
+    // 장점 :
+    // 1. usernameEq 메소드 이름만 봐도 바로 이해가능 구지. 코드를 뜯어서 이해할 필요 앖음.
+    // 2. 메소드로 따로 뺏기 때문에 다른 곳에서도 사용 가능.
+    // 3. 다른 조합 형태로 조합해서 사용 가능 ex) allEq()
+    // 그에 반해 BoolenaBuilder 는 위에서부터 하나하나 이해하면서 내려가야함.
+    private List<Member> searchMemberV2(String usernameCond, Integer ageCond) {
+        return query
+                .selectFrom(member)
+                // .where(usernameEq(usernameCond), ageEq(ageCond))
+                .where(allEq(usernameCond, ageCond))
+                .fetch();
+    }
+
+    private BooleanExpression usernameEq(String usernameCond) {
+        if (usernameCond == null) {
+            return null;
+        }
+        return member.username.eq(usernameCond);
+    }
+
+    private BooleanExpression ageEq(Integer ageCond) {
+        return ageCond != null ? member.age.eq(ageCond) : null;
+    }
+
+    // 조합해서 쓸려면 BooleanExpression 으로 반환해야함
+    // allEq 함수 말고 usernameEq, ageEq 함수들이
+    // Predicate, BooleanExpression 타입 모두 where 절에 들어갈 수 있음
+    private Predicate allEq(String usernameCond, Integer ageCond) {
+        return usernameEq(usernameCond).and(ageEq(ageCond));
+    }
+
+    // 벌크 연산
+    // 주의할 점 : 영속성 컨텍스트를 무시하고 디비에 쿼리가 나간다.
+    // 영속성 컨텍스트 != 디비
+    // 플러시 및 초기화를 통해 같게 만들어주어야 한다.
+    @Test
+    void bulkUpdate() {
+
+        // member1 = 10 -> 비회원
+        // member2 = 20 -> 비회원
+        // member3 = 30 -> 유지
+        // member4 = 40 -> 유지
+
+        long count = query
+                .update(member)
+                .set(member.username, "비회원")
+                .where(member.age.lt(28))
+                .execute();
+
+        em.flush();
+        em.clear();
+
+        assertThat(count).isEqualTo(2);
+    }
+
+    // 더하기 연산이 이루어진다.
+    @Test
+    void bulkUpdateAdd() {
+        long count = query
+                .update(member)
+                .set(member.age, member.age.add(1))
+                // .set(member.age, member.age.add(-1)) 빼기가 따로 없다. -1일 더하자.
+                // .set(member.age, member.age.multiply(2)) 곱하기
+                .execute();
+    }
+
+    @Test
+    void bulkDelete() {
+        long count = query
+                .delete(member)
+                .where(member.age.lt(19))
+                .execute();
+    }
+
+    // 만약 사용자 정의 함수를 원한다면
+    // H2Dialect 를 상속해서 구현한 다음,
+    // application.yml 섷정 값을 통해 방언 구현체를 넣어줘야함
+    @Test
+    void sqlFunction() {
+        List<String> result = query
+                .select(Expressions.stringTemplate(
+                        "function('replace', {0}, {1}, {2})", // JPA Dialect 방언에 replace 라는 DB 함수가 등록되어있어야함.
+                        member.username, "member", "M"))
+                .from(member)
+                .fetch();
+
+        for (String s : result) {
+            System.out.println("s = " + s);
+        }
+    }
+
+    @Test
+    void sqlFunction2() {
+        List<String> result = query
+                .select(member.username)
+                .from(member)
+                // .where(member.username.eq(Expressions.stringTemplate("function('lower', {0})", member.username))) // 소문자 변환 함수
+                .where(member.username.eq(member.username.lower())) // 안시 표준에서 제공하는 함수들은 기본적으로 querydls 이 제공해주고 있음.
                 .fetch();
 
         for (String s : result) {
