@@ -92,6 +92,11 @@ public class MemberRepositoryCustomImplQuerySupport extends QuerydslRepositorySu
         return null;
     }
 
+    @Override
+    public Page<MemberTeamDto> searchPageFinal(MemberSearchCond condition, Pageable pageable) {
+        return null;
+    }
+
     private BooleanExpression usernameEq(String username) {
         return hasText(username) ? member.username.eq(username) : null;
     }

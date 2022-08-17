@@ -40,4 +40,9 @@ public class MemberController {
     public Page<MemberTeamDto> searchMemberV4(MemberSearchCond condition, Pageable pageable) {
         return memberRepository.searchPageCount(condition, pageable);
     }
+
+    @GetMapping("/v5")
+    public Page<MemberTeamDto> searchMemberV5(MemberSearchCond condition, Pageable pageable) {
+        return memberRepository.searchPageFinal(condition, pageable);
+    }
 }
