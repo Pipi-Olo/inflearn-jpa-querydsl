@@ -755,3 +755,225 @@ long count = queryFactory
 * 벌크 연산을 실행하고 항상 영속성 컨텍스트를 초기화한다.
 
 ---
+
+# 스프링 데이터 JPA + Querydsl
+## 사용자 정의 리포지토리
+![](https://velog.velcdn.com/images/pipiolo/post/f4a23be1-3a11-46f4-a5f6-bf8e8dc49763/image.png)
+
+* 스프링 데이터 JPA 는 인터페이스만 상속하면 구현체를 만들어 준다. → Querydsl 코드가 작성 되어야 할 구현체가 필요하다.
+* `MemberRepositoryCustom` 인터페이스를 작성한다.
+  → `MemberRepository` 가 `MemberRepositoryCustom` 를 상속한다.
+  → `MemberRepositoryImpl` 혹은 `MemberRepositoryCustomImpl` 이름으로 구현체를 생성한다.
+  → 스프링 데이터 JPA 가 구현체를 만들 때, `MemberRepositoryImpl` 구현체 기능을 포함한다.
+  
+## 스프링 데이터 페이징 + Querydsl 페이징
+```java
+public interface MemberRepository extends
+        JpaRepository<Member, Long>,
+        MemberRepositoryCustom
+{        
+	List<Member> findByUsername(String username);
+}
+```
+```java
+public interface MemberRepositoryCustom {
+
+	List<MemberTeamDto> search(MemberSearchCondition condition);
+}
+```
+```java
+public class MemberRepositoryCustomImpl implements MemberRepositoryCustom {
+
+    private final JPAQueryFactory query;
+
+    public MemberRepositoryCustomImpl(EntityManager em) {
+        this.query = new JPAQueryFactory(em);
+    }
+    
+    @Override
+    public Page<MemberTeamDto> search(MemberSearchCond condition, Pageable pageable) {
+        List<MemberTeamDto> content = query
+                .select(new QMemberTeamDto(
+                        member.id.as("memberId"),
+                        member.username,
+                        member.age,
+                        team.id.as("teamId"),
+                        team.name.as("teamName")))
+                .from(member)
+                .leftJoin(member.team, team)
+                .where(
+                        usernameEq(condition.getUsername()),
+                        teamNameEq(condition.getTeamName()),
+                        ageGoe(condition.getAgeGoe()),
+                        ageLoe(condition.getAgeLoe())
+                )
+                .offset(pageable.getOffset())
+                .limit(pageable.getPageSize())
+                .fetch();
+
+        JPAQuery<Long> countQuery = query
+                .select(member.count())
+                .from(member)
+                .leftJoin(member.team, team)
+                .where(
+                        usernameEq(condition.getUsername()),
+                        teamNameEq(condition.getTeamName()),
+                        ageGoe(condition.getAgeGoe()),
+                        ageLoe(condition.getAgeLoe())
+                );
+		
+        // return new PageImpl<>(content, pageable, total);
+        return PageableExecutionUtils.getPage(content, pageable, countQuery::fetchOne);
+    }
+    
+    private BooleanExpression usernameEq(String username) {
+        return hasText(username) ? member.username.eq(username) : null;
+    }
+
+    private BooleanExpression teamNameEq(String teamName) {
+        return hasText(teamName) ? team.name.eq(teamName) : null;
+    }
+
+    private BooleanExpression ageGoe(Integer ageGoe) {
+        return ageGoe != null ? member.age.goe(ageGoe) : null;
+    }
+
+    private BooleanExpression ageLoe(Integer ageLoe) {
+        return ageLoe != null ? member.age.loe(ageLoe) : null;
+    }
+}
+```
+* `fetchResult()`, `fetchCount()` 👉 `Deprecated`
+  * 개발자가 작성한 select 쿼리를 기반으로 내부에서 count 쿼리를 생성해 호출한다.
+  * 조인 등 복잡한 쿼리에서는 동작하지 않는다.
+* 내용과 전체 카운트를 조회하는 쿼리를 각각 작성해야 한다.
+* `PageableExecutionUtils` 👉 CountQuery 최적화
+  * 스프링 데이터 라이브러리가 제공하는 기술이다.
+    * 스프링 부트 2.6 부터 패키지가 변경 (`data.repository.support` → `data.support`) 되었다.
+  * count 쿼리를 생략 가능한 특수한 상황에 생략한다.
+    * `countQuery` 는 생략 가능한 경우를 대비해 `fetch()` 를 실행하지 않고 파라미터로 넘어간다.
+  * 내부적으로는 `PageImpl<>(..)` 이 동작한다.
+
+## 스프링 데이터 정렬
+```java
+JPAQuery<Member> query = queryFactory
+            .selectFrom(member);
+
+for (Sort.Order o : pageable.getSort()) {
+	PathBuilder pathBuilder = new PathBuilder(member.getType(), member.getMetadata());
+    query.orderBy(new OrderSpecifier(o.isAscending() ? Order.ASC : Order.DESC,
+    		pathBuilder.get(o.getProperty())));
+}
+
+List<Member> result = query.fetch();
+```
+
+* 정렬 조건이 조금만 복잡해져도 `Pageable` 의 Sort 기능을 사용하기 어렵다.
+* 루트 엔티티 범위를 넘어가거나 동적 정렬 기능은 애플리케이션 로직에서 해결하는 것을 권장한다.
+
+---
+
+# 스프링 데이터 JPA 가 제공하는 Querydsl 기타 기능
+## QuerydslPredicateExecutor - 인터페이스 지원
+#### QuerydslPredicateExecutor 인터페이스
+```java
+public interface QuerydslPredicateExecutor<T> {
+      Optional<T> findById(Predicate predicate);
+      Iterable<T> findAll(Predicate predicate);
+      long count(Predicate predicate);
+      boolean exists(Predicate predicate);
+      
+      ...
+}
+```
+
+#### 리포지토리 적용
+```java
+public interface MemberRepository extends 
+	JpaRepository<User, Long>,
+    QuerydslPredicateExecutor<User>
+{
+	...
+}
+```
+```java
+Iterable result = memberRepository.findAll(
+				member.age.between(10, 40)
+            	.and(member.username.eq("member1")));
+```
+
+* `MemberRepositoryImpl` 등 Querydsl 구현체 없이 `Predicate` 를 사용할 수 있다.
+* 조인이 불가능 하다. 
+  * 묵시적 조인은 가능하지만, leftJoin 이 불가능하다.
+* 서비스 계층이 Querydsl 특정 리포지토리 기술에 의존해야 한다.
+* 쓰지 말자.
+
+## Querydsl Web
+```java
+@Controller
+class UserController {
+
+    private final UserRepository repository;
+
+    @RequestMapping(value = "/", method = RequestMethod.GET)
+    String index(@RequestParam MultiValueMap<String, String> parameters,
+    			 @QuerydslPredicate(root = User.class) Predicate predicate,
+                 Pageable pageable, 
+                 Model model
+    ) {
+        model.addAttribute("users", repository.findAll(predicate, pageable));
+        return "index";
+    }
+}
+```
+* 단순한 조건만 가능하고 명시적이지 않다.
+* 컨트롤러가 Querydsl 에 의존한다.
+* 쓰지 말자.
+
+## QuerydslRepositorySupport - 리포지토리 지원
+```java
+public class MemberRepositoryImpl extends QuerydslRepositorySupport implements MemberRepositoryCustom {
+
+    public MemberRepositoryCustomImplQuerySupport(EntityManager em) {
+        super(Member.class);
+    }
+    
+    @Override
+    public Page<MemberTeamDto> searchPage(MemberSearchCond condition, Pageable pageable) {
+        JPQLQuery<MemberTeamDto> jpqlQuery = from(member)
+                .leftJoin(member.team, team)
+                .where(
+                        usernameEq(condition.getUsername()),
+                        teamNameEq(condition.getTeamName()),
+                        ageGoe(condition.getAgeGoe()),
+                        ageLoe(condition.getAgeLoe()))
+                .select(new QMemberTeamDto(
+                        member.id.as("memberId"),
+                        member.username,
+                        member.age,
+                        team.id.as("teamId"),
+                        team.name.as("teamName")));
+
+        JPQLQuery<MemberTeamDto> jpaQuery = getQuerydsl().applyPagination(pageable, jpqlQuery);
+        QueryResults<MemberTeamDto> result = jpaQuery.fetchResults();
+
+        List<MemberTeamDto> content = result.getResults();
+        long total = result.getTotal();
+
+        return new PageImpl<>(content, pageable, total);
+    }
+}
+```
+
+* `getQuerydsl().applyPagination()` 을 통해 스프링 데이터가 제공하는 페이징을 `offset()`, `limit()` 없이 Querydsl 에서 사용할 수 있다.
+  * 단, Sort 는 오류가 발생한다.
+  * 내부적으로는 스프링 데이터가 제공하는 Querydsl 클래스를 통해 EntityManager 가 동작한다.
+* 메소드 체인이 끊기면서 가독성이 떨어진다.
+* Querydsl 4.x에 나온 JPAQueryFactory 를 제공하지 않는다.
+  * 기존처럼 별도로 생성자를 통해 EntityManager 를 받거나 JPQQueryFactory 를 스프링 빈으로 등록해야 한다.
+    * 스프링 데이터가 제공하는 EntityManager 가 의미가 없다.
+  * Querydsl 3.x 버전을 대상으로 만들어졌다.
+* `select` 로 시작할 수 없다. `from` 으로 시작해야 한다.
+* 쓰지 말자.
+
+---
