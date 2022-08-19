@@ -114,6 +114,7 @@ QMember qMember = QMember.member;   // 기본 인스턴스 사용
 ```
 
 * 서브 쿼리, 셀프 조인 등 특별한 경우를 제외하고는 기본 인스턴스를 사용하자.
+* 별칭이 같으면 구별할 수가 없다.
 
 ## 검색 조건 쿼리
 ```java
@@ -196,6 +197,17 @@ long count = queryFactory
 * `fetchCount()` : 카운트 쿼리로 변경해서 호출한다.
   * Querydsl 5.0 부터 Deprecated 되었다. 
     👉 `select(Wildcard.count)`, `select(member.count())` 을 사용한다.
+
+## 중복 제거
+```java
+List<String> result = queryFactory
+			.select(member.username).distinct()
+            .from(member)
+            .fetch();
+```
+
+* `distinct()` 는 JPQL distinct 와 동일하게 동작한다.
+* SQL distinct + 애플리케이션에서 엔티티 중복 제거를 실행한다.
 
 ## 정렬
 ```java
@@ -422,10 +434,15 @@ void subQuery() {
   * JPA 는 where 절 서브 쿼리만 지원한다.
   * 하이버네이트 구현체가 select 절 서브 쿼리를 지원한다.
 
-#### from 절 서브 쿼리 해결방안
+#### from 절 서브쿼리 해결방안
 * 서브 쿼리를 `join` 으로 변경한다. 불가능할 수도 있다.
 * 애플리케이션에서 쿼리를 분리해서 2번 실행한다.
 * `nativeSQL` 을 사용한다.
+
+> from 절 서브 쿼리 사용 이유
+> 특정 화면에 종속적인 데이터를 위해 from 절 서브 쿼리를 사용하는 경우가 종종 있다. 
+> 재사용성이 너무 떨어지기 때문에 좋지 않다. 
+> 특정 화면에 맞추기 위해 데이터를 조작하는 행위는 애플리케이션 혹은 뷰에서 해결할 문제이다. 데이터베이스에서 해결할 문제는 아니다.
 
 ## Case 문
 ```java
@@ -461,6 +478,9 @@ void caseWithOrderBy() {
 * Case 문에 해당하는 조건을 `rankPath` 처럼 변수로 선언할 수 있다.
 * `select`, `orderBy` 절에 사용할 수 있다.
 
+> Case 문을 언제 써야할 까?
+> 조회하는 데이터 수를 줄이는 where, filtering 기능은 좋다. 하지만, 데이터를 가공하는 행위는 데이터베이스에서 하지 않는 것이 좋다. 효율, 성능 등 특별한 경우를 제외하고는 다른 방법을 사용하자.
+
 ## 상수, 문자 더하기
 #### constant
 ```java
@@ -488,3 +508,250 @@ void concat() {
 ```
 
 * `stringValue()` 는 문자가 아닌 타입을 문자로 변환할 수 있다. → `ENUM` 처리에 많이 사용된다.
+
+---
+
+# 중급 문법
+## 프로젝션 결과 반환 - 기본
+### 프로젝션 대상이 1개일 때
+```java
+List<String> result = queryFactory
+            .select(member.username)
+            .from(member)
+            .fetch();
+```
+
+* select 절에 지정된 대상을 프로젝션이라 한다.
+* 프로젝션 대상이 하나면 타입을 명확하게 지정할 수 있다.
+
+### 프로젝션 대상이 둘 이상일 때
+* 프로젝션 대상이 둘 이상이면 튜플이나 DTO 로 조회한다.
+
+#### 튜플 조회
+```java
+List<Tuple> result = queryFactory
+		.select(member.username, member.age)
+        .from(member)
+        .fetch();
+        
+for (Tuple tuple : result) {
+    String username = tuple.get(member.username);
+	Integer age = tuple.get(member.age);
+}
+```
+
+* `Tuple` 은 Querydsl 기술이다. → 리포지토리 이외 계층에서 사용하는 것은 안 좋다.
+  * 컨트롤러, 서비스 계층이 특정 데이터베이스 기술에 종속적이게 된다.
+* 리포지토리에서 반환할 때는 `Tuple` 이 아닌, DTO 형태로 반환해야 한다.
+
+#### 순수 JPA DTO 조회
+```java
+@Data
+public class MemberDto {
+	private String username;
+    private int age;
+}
+```
+```java
+List<MemberDto> result = em.createQuery(
+			"select new study.querydsl.dto.MemberDto(m.username, m.age) " +
+        		"from Member m", MemberDto.class)
+        	.getResultList();
+```
+
+* 순수 JPA DTO 를 조회할 때는 new 명령어와 패키지명이 필요하다.
+* 생성자 방식만 지원한다.
+
+### Projections.xxx() DTO 조회
+* 패키지 명이 필요없다.
+
+#### 프로퍼티 접근 - Projections.bean
+```java
+List<MemberDto> result = queryFactory
+        .select(Projections.bean(MemberDto.class,
+        			member.username,
+                    member.age))
+        .from(member)
+		.fetch();
+```
+
+* 기본 생성자가 필수이다.
+* 먼저 `MemberDto` 객체를 생성하고 setter 메소드를 통해 값을 저장한다.
+
+#### 필드 직접 접근 - Projections.fields
+```java
+List<MemberDto> result = queryFactory
+        .select(Projections.fields(MemberDto.class,
+        			member.username,
+                    member.age))
+        .from(member)
+		.fetch(); 
+```
+
+* setter 메소드가 없어도 private 필드에 값을 저장할 수 있다.
+
+#### 별칭이 다를 때 - as
+```java
+@Data
+public class UserDto {
+	private String name; // != username
+    private int age;
+}
+```
+```java
+List<UserDto> fetch = queryFactory
+			.select(Projections.fields(UserDto.class,
+					member.username.as("name"),
+                	ExpressionUtils.as(JPAExpressions
+        					.select(memberSub.age.max())
+        					.from(memberSub), "age")))
+			.from(member)
+			.fetch();
+```
+
+* Member 엔티티의 `username` 과 UserDto 의 `name` 변수명이 다르다.
+* 프로퍼티나 필드 접근 생성 방식에서 이름이 다를 때, `as` 를 사용한다.
+  * `member.username.as("name")` 👉 필드에 별칭을 적용한다.
+  * `ExpressionUtils.as(source, alias)` 👉 필드 혹은 서브 쿼리에 별칭을 적용한다.
+
+#### 생성자 사용 - Projections.constructor
+```java
+List<MemberDto> result = queryFactory
+		.select(Projections.constructor(MemberDto.class,
+        		member.username,
+       			member.age))
+		.from(member)
+		.fetch();
+```
+
+* 이 방법은 기본 생성자가 없어도 된다.
+
+## 프로젝션 결과 반환 - @QueryProjection
+#### 생성자 + @QueryProjection
+```java
+@Data
+public class MemberDto {
+	private String username;
+    private int age;
+      
+    @QueryProjection
+    public MemberDto(String username, int age) {
+        this.username = username;
+        this.age = age;
+    }
+}
+```
+```java
+List<MemberDto> result = queryFactory
+			.select(new QMemberDto(member.username, member.age))
+            .from(member)
+            .fetch();
+```
+
+* `@QueryProjection` 애노테이션으로 인해 `QMemberDto` 가 생성된다.
+* `Projections.xxx()` 방식과 다르게 컴파일러 시점에 타입 체크를 할 수 있다.
+* 가장 안정적인 방법이나, DTO 가 특정 데이터베이스 기술에 종속된다는 단점이 있다.
+
+## 동적 쿼리
+### BooleanBuilder
+```java
+@Test
+void dynamicQuery_booleanBuilder() {
+	String usernameParam = "member1";
+    Integer ageParam = 10;
+        
+    List<Member> result = search(usernameParam, ageParam);
+}
+
+private List<Member> search(String usernameCond, Integer ageCond) {
+	BooleanBuilder builder = new BooleanBuilder();
+    if (usernameCond != null) {
+        builder.and(member.username.eq(usernameCond));
+    }
+      
+    if (ageCond != null) {
+        builder.and(member.age.eq(ageCond));
+    }
+    
+    return query
+    		.selectFrom(member)
+            .where(builder)
+            .fetch();
+}
+
+```
+
+### Where 다중 파라미터
+```java
+@Test
+void dynamicQuery_whereParam() { 
+	String usernameParam = "member1";
+	Integer ageParam = 10;
+    
+    List<Member> result = search(usernameParam, ageParam);
+}
+
+private List<Member> search(String usernameCond, Integer ageCond) {
+	return query
+    		.selectFrom(member)
+            .where(usernameEq(usernameCond), ageEq(ageCond))
+            .fetch();
+}
+
+private BooleanExpression usernameEq(String usernameCond) {
+	if (usernameCond == null) {
+    	return null;
+    }
+    
+	return member.username.eq(usernameCond);
+}
+  
+private BooleanExpression ageEq(Integer ageCond) {
+	return ageCond != null ? member.age.eq(ageCond) : null;
+}
+```
+
+* `where()` 조건에 `null` 값은 자동으로 무시된다. → 동적 쿼리가 가능해진다.
+* 메서드를 통해 다른 쿼리에서도 재사용할 수 있다.
+  * 메서드들을 조합해서 새로운 조건을 만들 수 있다.
+* 쿼리의 가독성이 높아진다.
+* Where 다중 파라미터를 사용하자.
+
+#### 조합
+```java
+private BooleanExpression allEq(String usernameCond, Integer ageCond) {
+    return usernameEq(usernameCond).and(ageEq(ageCond));
+}
+```
+
+* 조합 기능을 사용하기 위해서는 반환 값이 `BooleanExpression` 이어야 한다.
+* 기존에는 `Predicate` 반환 값이다.
+  * `Predicate` → 인터페이스
+  * `BooleanExpression` → 구현체
+
+## 수정, 삭제 벌크 연산
+#### 쿼리 한번으로 대량 데이터 수정
+```java
+long count = queryFactory
+		.update(member)
+        .set(member.age, member.age.add(1))
+        //.set(member.age, member.age.add(-1))
+        //.set(member.age, member.age.multiply(2))
+        .execute();
+```
+
+* 빼기가 필요한 경우, 음수 값을 더해야 한다.
+* 반환 값은 벌크 연산이 적용된 데이터 수이다.
+
+#### 쿼리 한번으로 대량 데이터 삭제
+```java
+long count = queryFactory
+		.delete(member)
+        .where(member.age.gt(18))
+        .execute();
+```
+
+* JPA 와 동일하게 영속성 켄텍스트를 무시하고 실행된다. 👉 영속성 컨텍스트 != 데이터베이스 상황이 발생한다.
+* 벌크 연산을 실행하고 항상 영속성 컨텍스트를 초기화한다.
+
+---
