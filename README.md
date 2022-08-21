@@ -932,14 +932,20 @@ class UserController {
 
 ## QuerydslRepositorySupport - 리포지토리 지원
 ```java
-public class MemberRepositoryImpl extends QuerydslRepositorySupport implements MemberRepositoryCustom {
+public class MemberRepositoryImpl 
+		extends QuerydslRepositorySupport 
+        implements MemberRepositoryCustom
+{
 
     public MemberRepositoryCustomImplQuerySupport(EntityManager em) {
         super(Member.class);
     }
     
     @Override
-    public Page<MemberTeamDto> searchPage(MemberSearchCond condition, Pageable pageable) {
+    public Page<MemberTeamDto> searchPage(
+    		MemberSearchCond condition, 
+            Pageable pageable
+    ) {
         JPQLQuery<MemberTeamDto> jpqlQuery = from(member)
                 .leftJoin(member.team, team)
                 .where(
@@ -954,7 +960,8 @@ public class MemberRepositoryImpl extends QuerydslRepositorySupport implements M
                         team.id.as("teamId"),
                         team.name.as("teamName")));
 
-        JPQLQuery<MemberTeamDto> jpaQuery = getQuerydsl().applyPagination(pageable, jpqlQuery);
+        JPQLQuery<MemberTeamDto> jpaQuery = getQuerydsl()
+        							.applyPagination(pageable, jpqlQuery);
         QueryResults<MemberTeamDto> result = jpaQuery.fetchResults();
 
         List<MemberTeamDto> content = result.getResults();
